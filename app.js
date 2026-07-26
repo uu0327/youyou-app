@@ -47,11 +47,53 @@ function load(){
     const d = JSON.parse(raw);
     // 兜底合并
     const base = defaultData();
-    return {...base, ...d, health:{...base.health, ...(d.health||{})}, settings:{...base.settings, ...(d.settings||{})}};
+    const merged = {...base, ...d, health:{...base.health, ...(d.health||{})}, settings:{...base.settings, ...(d.settings||{})}};
+    // diaries 字段迁移：string -> object {text, photos, tags}
+    if(merged.diaries){
+      for(const k in merged.diaries){
+        const v = merged.diaries[k];
+        if(typeof v === 'string'){
+          merged.diaries[k] = { text: v, photos: [], tags: [] };
+        }else if(v && typeof v === 'object'){
+          if(typeof v.text !== 'string') v.text = '';
+          if(!Array.isArray(v.photos)) v.photos = [];
+          if(!Array.isArray(v.tags)) v.tags = [];
+        }
+      }
+    }
+    return merged;
   }catch(e){ return defaultData(); }
 }
-function save(){ localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
+function save(){
+  try{
+    localStorage.setItem(STORE_KEY, JSON.stringify(state));
+    return true;
+  }catch(e){
+    toast('存储空间不够啦，请删一些照片');
+    return false;
+  }
+}
 let state = load();
+
+// ---------- 日记辅助函数 ----------
+function getDiary(date){
+  const d = state.diaries[date];
+  if(!d) return { text:'', photos:[], tags:[] };
+  if(typeof d === 'string') return { text:d, photos:[], tags:[] };
+  return { text:d.text||'', photos:d.photos||[], tags:d.tags||[] };
+}
+function setDiary(date, obj){
+  state.diaries[date] = {
+    text: obj.text||'',
+    photos: Array.isArray(obj.photos) ? obj.photos : [],
+    tags: Array.isArray(obj.tags) ? obj.tags : []
+  };
+}
+
+// HTML 转义，防止 textarea 内容破坏 DOM
+function escapeHtml(s){
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
 
 // ---------- 工具 ----------
 function toast(msg){
@@ -134,7 +176,7 @@ function viewHome(){
   const t = todayStr();
   const mood = state.moods[t];
   const moodEmoji = mood || '🤔';
-  const summary = state.diaries[t] || '';
+  const summary = getDiary(t).text;
   const today = new Date();
   const wd = ['日','一','二','三','四','五','六'][today.getDay()];
   return `
@@ -184,7 +226,7 @@ function viewHome(){
     <div class="card">
       <h2><span class="em">📔</span>每日总结</h2>
       <div class="summary-box">
-        <textarea id="summary-input" placeholder="今天有有什么有趣的事呢？让爸爸妈妈帮你写下来～">${summary}</textarea>
+        <textarea id="summary-input" placeholder="今天有有什么有趣的事呢？让爸爸妈妈帮你写下来～">${escapeHtml(summary)}</textarea>
       </div>
     </div>
   `;
@@ -201,14 +243,17 @@ afterRender.home = function(){
   const si = document.getElementById('summary-input');
   if(si){
     let tid;
+    const persist = ()=>{
+      const d = getDiary(todayStr());
+      d.text = si.value;
+      setDiary(todayStr(), d);
+      save();
+    };
     si.oninput = ()=>{
       clearTimeout(tid);
-      tid = setTimeout(()=>{
-        state.diaries[todayStr()] = si.value;
-        save();
-      }, 400);
+      tid = setTimeout(persist, 400);
     };
-    si.onblur = ()=>{ state.diaries[todayStr()] = si.value; save(); };
+    si.onblur = persist;
   }
 };
 
@@ -511,10 +556,20 @@ afterRender.health = function(){
 
 // ================= 心情 =================
 let moodSelectedDate = todayStr(); // 心情页当前选中的日期，默认今天
+let moodCalY = new Date().getFullYear(), moodCalM = new Date().getMonth();
+const DIARY_TAGS = [
+  {k:'school', ic:'🏫', name:'学校'},
+  {k:'home', ic:'🏠', name:'家庭'},
+  {k:'play', ic:'🎮', name:'玩耍'},
+  {k:'other', ic:'✨', name:'其他'},
+];
+const MOOD_LABELS = {'😊':'开心','😄':'超开心','😐':'一般','😢':'难过','😡':'生气','😴':'困倦','🤩':'兴奋'};
+
 function viewMood(){
   const t = moodSelectedDate;
   const curMood = state.moods[t];
   const moods = ['😊','😄','😐','😢','😡','😴','🤩'];
+  const diary = getDiary(t);
   // 最近7天心情
   const days = [];
   for(let i=6;i>=0;i--){
@@ -546,13 +601,43 @@ function viewMood(){
           </div>`).join('')}
       </div>
     </div>
+
     <div class="card">
       <h2><span class="em">📔</span>${isToday?'今日':'当日'}心情日记</h2>
-      <textarea class="diary-input" id="diary-input" placeholder="写下这一天发生的事吧～">${state.diaries[t]||''}</textarea>
+      <div class="tag-row">
+        ${DIARY_TAGS.map(tg=>`
+          <div class="tag-chip ${diary.tags.includes(tg.k)?'active':''}" data-tag="${tg.k}">
+            <span>${tg.ic}</span><span>${tg.name}</span>
+          </div>`).join('')}
+      </div>
+      ${diary.photos.length>0 ? `
+        <div class="photo-thumbs" id="photo-thumbs">
+          ${diary.photos.map((p,idx)=>`
+            <div class="photo-thumb-wrap" data-pidx="${idx}">
+              <img class="photo-thumb" src="${p}" data-photo="${idx}">
+              <button class="photo-del" data-del="${idx}">×</button>
+            </div>`).join('')}
+        </div>
+      `:''}
+      ${diary.photos.length<3 ? `<button class="add-photo-btn" id="add-photo">📷 添加照片 (${diary.photos.length}/3)</button>`:''}
+      <input type="file" id="photo-input" accept="image/*" multiple style="display:none;">
+      <textarea class="diary-input" id="diary-input" placeholder="写下这一天发生的事吧～">${escapeHtml(diary.text)}</textarea>
       <button class="btn full" id="diary-save">保存日记</button>
     </div>
+
     <div class="card">
-      <h2><span class="em">📆</span>最近7天心情</h2>
+      <h2><span class="em">📆</span>月心情日历</h2>
+      <div class="cal-head">
+        <button id="mood-cal-prev">‹</button>
+        <div class="ym" id="mood-cal-ym">${moodCalY}年${moodCalM+1}月</div>
+        <button id="mood-cal-next">›</button>
+      </div>
+      <div class="cal-grid" id="mood-cal-grid"></div>
+      <div class="mood-stat" id="mood-stat"></div>
+    </div>
+
+    <div class="card">
+      <h2><span class="em">📋</span>最近7天心情</h2>
       <div class="mood-row" style="justify-content:space-between;">
         ${days.map(d=>`
           <div class="m ${d.ds===t?'selected':''}" data-jump="${d.ds}" style="font-size:10px;">
@@ -563,6 +648,47 @@ function viewMood(){
     </div>
   `;
 }
+
+function drawMoodCal(){
+  const grid = document.getElementById('mood-cal-grid');
+  const ym = document.getElementById('mood-cal-ym');
+  if(!grid) return;
+  ym.textContent = `${moodCalY}年${moodCalM+1}月`;
+  const first = new Date(moodCalY, moodCalM, 1).getDay();
+  const days = new Date(moodCalY, moodCalM+1, 0).getDate();
+  const tStr = todayStr();
+  let html = ['日','一','二','三','四','五','六'].map(w=>`<div class="wk">${w}</div>`).join('');
+  for(let i=0;i<first;i++){
+    const pd = new Date(moodCalY,moodCalM,1-i);
+    html += `<div class="d other">${pd.getDate()}</div>`;
+  }
+  for(let d=1; d<=days; d++){
+    const ds = `${moodCalY}-${String(moodCalM+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const mood = state.moods[ds];
+    const isToday = ds===tStr;
+    const isSel = ds===moodSelectedDate;
+    const cls = ['d'];
+    if(isToday) cls.push('today');
+    if(isSel) cls.push('sel');
+    if(mood) cls.push('has-mood');
+    html += `<div class="${cls.join(' ')}" data-cal-jump="${ds}">
+      ${mood ? `<span class="mood-emoji">${mood}</span>` : `<span class="day-num">${d}</span>`}
+    </div>`;
+  }
+  grid.innerHTML = html;
+  // 月统计
+  const stat = document.getElementById('mood-stat');
+  const counts = {};
+  for(let d=1; d<=days; d++){
+    const ds = `${moodCalY}-${String(moodCalM+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const m = state.moods[ds];
+    if(m){ counts[m] = (counts[m]||0)+1; }
+  }
+  const entries = Object.entries(counts).filter(([,n])=>n>0);
+  stat.innerHTML = entries.length===0 ? `<div class="item">本月还没有心情记录</div>` :
+    entries.map(([e,n])=>`<div class="item">${e} ${MOOD_LABELS[e]||''} ${n}天</div>`).join('');
+}
+
 afterRender.mood = function(){
   // 日期选择
   const dateInput = document.getElementById('mood-date');
@@ -578,10 +704,34 @@ afterRender.mood = function(){
   if(backBtn){
     backBtn.onclick = ()=>{ moodSelectedDate = todayStr(); renderView(); };
   }
-  // 点击7天里某天跳转
+  // 月历
+  drawMoodCal();
+  document.getElementById('mood-cal-prev').onclick = ()=>{
+    moodCalM--; if(moodCalM<0){moodCalM=11;moodCalY--;} drawMoodCal();
+  };
+  document.getElementById('mood-cal-next').onclick = ()=>{
+    // 不能超过当月
+    const now = new Date();
+    if(moodCalY===now.getFullYear() && moodCalM>=now.getMonth()) return;
+    moodCalM++; if(moodCalM>11){moodCalM=0;moodCalY++;} drawMoodCal();
+  };
+  // 点击月历某天 / 7天某天跳转（用事件委托，月历切换月份后仍生效）
+  const calGrid = document.getElementById('mood-cal-grid');
+  if(calGrid){
+    calGrid.addEventListener('click', e=>{
+      const cell = e.target.closest('[data-cal-jump]');
+      if(!cell) return;
+      moodSelectedDate = cell.dataset.calJump;
+      const d = new Date(moodSelectedDate+'T00:00:00');
+      moodCalY = d.getFullYear(); moodCalM = d.getMonth();
+      renderView();
+    });
+  }
   document.querySelectorAll('.m[data-jump]').forEach(m=>{
     m.onclick = ()=>{
       moodSelectedDate = m.dataset.jump;
+      const d = new Date(moodSelectedDate+'T00:00:00');
+      moodCalY = d.getFullYear(); moodCalM = d.getMonth();
       renderView();
     };
   });
@@ -593,10 +743,97 @@ afterRender.mood = function(){
       save(); renderView(); toast('心情已记录～');
     };
   });
-  // 日记
+  // 标签 toggle
+  document.querySelectorAll('.tag-chip[data-tag]').forEach(c=>{
+    c.onclick = ()=>{
+      const k = c.dataset.tag;
+      const d = getDiary(t);
+      const i = d.tags.indexOf(k);
+      if(i>=0) d.tags.splice(i,1); else d.tags.push(k);
+      setDiary(t, d); save();
+      c.classList.toggle('active');
+    };
+  });
+  // 添加照片
+  const photoInput = document.getElementById('photo-input');
+  const addPhotoBtn = document.getElementById('add-photo');
+  if(addPhotoBtn && photoInput){
+    addPhotoBtn.onclick = ()=> photoInput.click();
+    photoInput.onchange = ()=>{
+      const files = Array.from(photoInput.files);
+      if(!files.length) return;
+      const d = getDiary(t);
+      let remaining = 3 - d.photos.length;
+      let processed = 0;
+      files.slice(0, remaining).forEach(f=>{
+        const reader = new FileReader();
+        reader.onload = ()=>{
+          // 压缩图片到 800px 宽
+          const img = new Image();
+          img.onload = ()=>{
+            const canvas = document.createElement('canvas');
+            const maxW = 800;
+            let w = img.width, h = img.height;
+            if(w > maxW){ h = h * maxW / w; w = maxW; }
+            canvas.width = w; canvas.height = h;
+            canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+            const compressed = canvas.toDataURL('image/jpeg', 0.7);
+            d.photos.push(compressed);
+            setDiary(t, d);
+            processed++;
+            if(processed === Math.min(files.length, remaining)){
+              if(save()) toast('照片已添加～');
+              renderView();
+            }
+          };
+          img.src = reader.result;
+        };
+        reader.readAsDataURL(f);
+      });
+    };
+  }
+  // 点击照片放大
+  document.querySelectorAll('.photo-thumb').forEach(img=>{
+    img.onclick = ()=> openModal(`
+      <div style="text-align:center;">
+        <img src="${img.src}" style="max-width:100%;max-height:70vh;border-radius:12px;">
+        <div class="actions" style="margin-top:14px;">
+          <button class="btn ghost" onclick="closeModal()">关闭</button>
+        </div>
+      </div>
+    `);
+  });
+  // 长按删除照片
+  document.querySelectorAll('.photo-thumb-wrap').forEach(w=>{
+    let timer;
+    const start = ()=>{ timer = setTimeout(()=>{
+      const idx = parseInt(w.dataset.pidx);
+      if(confirm('删除这张照片吗？')){
+        const d = getDiary(t);
+        d.photos.splice(idx,1);
+        setDiary(t, d); save(); renderView();
+      }
+    }, 600); };
+    const cancel = ()=>clearTimeout(timer);
+    w.addEventListener('touchstart', start);
+    w.addEventListener('touchend', cancel);
+    w.addEventListener('touchmove', cancel);
+    w.querySelector('.photo-del').onclick = (e)=>{
+      e.stopPropagation();
+      const idx = parseInt(w.dataset.pidx);
+      if(confirm('删除这张照片吗？')){
+        const d = getDiary(t);
+        d.photos.splice(idx,1);
+        setDiary(t, d); save(); renderView();
+      }
+    };
+  });
+  // 日记保存
   const di = document.getElementById('diary-input');
   document.getElementById('diary-save').onclick = ()=>{
-    state.diaries[t] = di.value;
+    const d = getDiary(t);
+    d.text = di.value;
+    setDiary(t, d);
     save(); toast('日记已保存～');
   };
 };
