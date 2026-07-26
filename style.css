@@ -222,6 +222,20 @@ body{
 .diary-input{width:100%;background:var(--pink-50);border:2px solid var(--pink-100);border-radius:14px;padding:12px;font-size:14px;font-family:inherit;color:var(--ink);outline:none;min-height:80px;resize:none;margin-bottom:10px;}
 .diary-input:focus{border-color:var(--pink-300);}
 
+/* date picker row */
+.date-picker-row{display:flex;align-items:center;gap:8px;margin-bottom:12px;}
+.date-picker{
+  flex:1;display:flex;align-items:center;gap:6px;
+  background:var(--pink-50);border:2px solid var(--pink-100);border-radius:12px;
+  padding:8px 12px;
+}
+.date-picker .ic{font-size:16px;}
+.date-picker input{
+  flex:1;background:transparent;border:none;font-size:14px;font-family:inherit;color:var(--ink);outline:none;
+  min-width:0;
+}
+.date-picker input::-webkit-calendar-picker-indicator{cursor:pointer;}
+
 /* points */
 .points-hero{
   background:linear-gradient(135deg,#FFD0DC,#FF8FAB);

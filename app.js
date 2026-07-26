@@ -510,53 +510,90 @@ afterRender.health = function(){
 };
 
 // ================= 心情 =================
+let moodSelectedDate = todayStr(); // 心情页当前选中的日期，默认今天
 function viewMood(){
-  const t = todayStr();
-  const todayMood = state.moods[t];
+  const t = moodSelectedDate;
+  const curMood = state.moods[t];
   const moods = ['😊','😄','😐','😢','😡','😴','🤩'];
   // 最近7天心情
   const days = [];
   for(let i=6;i>=0;i--){
     const d = new Date(); d.setDate(d.getDate()-i);
     const ds = d.toISOString().slice(0,10);
-    days.push({ds, mood: state.moods[ds], label:`${d.getMonth()+1}/${d.getDate()}`});
+    days.push({ds, mood: state.moods[ds], label:`${d.getMonth()+1}/${d.getDate()}`, isToday: ds===todayStr()});
   }
+  const isToday = t === todayStr();
+  const dateLabel = (()=> {
+    const d = new Date(t+'T00:00:00');
+    const wd = ['日','一','二','三','四','五','六'][d.getDay()];
+    return `${d.getMonth()+1}月${d.getDate()}日 星期${wd}`;
+  })();
   return `
     <div class="page-head"><h1>心情日记 😊</h1></div>
     <div class="card">
-      <h2><span class="em">${todayMood||'🤔'}</span>今天心情怎么样？</h2>
+      <h2><span class="em">${curMood||'🤔'}</span>${isToday?'今天':dateLabel}心情怎么样？</h2>
+      <div class="date-picker-row">
+        <label class="date-picker">
+          <span class="ic">📅</span>
+          <input type="date" id="mood-date" value="${t}" max="${todayStr()}">
+        </label>
+        ${!isToday?`<button class="btn sm ghost" id="back-today">回到今天</button>`:''}
+      </div>
       <div class="mood-row">
         ${moods.map(e=>`
-          <div class="m ${todayMood===e?'selected':''}" data-mood="${e}">
+          <div class="m ${curMood===e?'selected':''}" data-mood="${e}">
             <span class="e">${e}</span>
           </div>`).join('')}
       </div>
     </div>
     <div class="card">
-      <h2><span class="em">📔</span>心情日记</h2>
-      <textarea class="diary-input" id="diary-input" placeholder="今天发生了什么好玩的事？写下来吧～">${state.diaries[t]||''}</textarea>
+      <h2><span class="em">📔</span>${isToday?'今日':'当日'}心情日记</h2>
+      <textarea class="diary-input" id="diary-input" placeholder="写下这一天发生的事吧～">${state.diaries[t]||''}</textarea>
       <button class="btn full" id="diary-save">保存日记</button>
     </div>
     <div class="card">
       <h2><span class="em">📆</span>最近7天心情</h2>
       <div class="mood-row" style="justify-content:space-between;">
         ${days.map(d=>`
-          <div class="m" style="font-size:10px;">
+          <div class="m ${d.ds===t?'selected':''}" data-jump="${d.ds}" style="font-size:10px;">
             <span class="e">${d.mood||'·'}</span>
-            <span>${d.label}</span>
+            <span>${d.isToday?'今天':d.label}</span>
           </div>`).join('')}
       </div>
     </div>
   `;
 }
 afterRender.mood = function(){
-  const t = todayStr();
+  // 日期选择
+  const dateInput = document.getElementById('mood-date');
+  if(dateInput){
+    const onDate = ()=>{
+      const v = dateInput.value;
+      if(v) { moodSelectedDate = v; renderView(); }
+    };
+    dateInput.onchange = onDate;
+    dateInput.oninput = onDate;
+  }
+  const backBtn = document.getElementById('back-today');
+  if(backBtn){
+    backBtn.onclick = ()=>{ moodSelectedDate = todayStr(); renderView(); };
+  }
+  // 点击7天里某天跳转
+  document.querySelectorAll('.m[data-jump]').forEach(m=>{
+    m.onclick = ()=>{
+      moodSelectedDate = m.dataset.jump;
+      renderView();
+    };
+  });
+  // 选表情
+  const t = moodSelectedDate;
   document.querySelectorAll('.mood-row .m[data-mood]').forEach(m=>{
     m.onclick = ()=>{
       state.moods[t] = m.dataset.mood;
       save(); renderView(); toast('心情已记录～');
     };
   });
+  // 日记
   const di = document.getElementById('diary-input');
   document.getElementById('diary-save').onclick = ()=>{
     state.diaries[t] = di.value;
